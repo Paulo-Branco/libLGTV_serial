@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import re
 import serial
 import os
 import time
@@ -10,17 +11,32 @@ from filelock import FileLock
 
 actual_codes = {}
 common_codes = {
-    'aspect43'      : b"kc 00 01",
-    'aspect169'     : b"kc 00 02",
-    'aspectstatus'  : b"kc 00 ff",
-    'poweroff'      : b"ka 00 00",
-    'poweron'       : b"ka 00 01",
-    'powerstatus'   : b"ka 00 ff",
-    'volumelevel'   : b"kf 00 ff",
-    'mute'          : b"ke 00 00",
-    'unmute'        : b"ke 00 01",
-    'mutestatus'    : b"ke 00 ff"
+    'aspect43'              : b"kc 00 01",
+    'aspect169'             : b"kc 00 02",
+    'aspectstatus'          : b"kc 00 ff",
+    'poweroff'              : b"ka 00 00",
+    'poweron'               : b"ka 00 01",
+    'powerstatus'           : b"ka 00 ff",
+    'mute'                  : b"ke 00 00",
+    'unmute'                : b"ke 00 01",
+    'mutestatus'            : b"ke 00 ff"
 }
+actual_codes['LW300C_etc'] = common_codes.copy()
+actual_codes['LW300C_etc'].update({
+    'lockstatus'            : b"km 00 ff",
+    'lockon'                : b"km 00 01",
+    'lockoff'               : b"km 00 00",
+    'osdon'                 : b"kl 00 01",
+    'osdoff'                : b"kl 00 00",
+    'volumelevel'           : b"kf 00 ff",
+    'brightnesslevel'       : b"kh 00 ff",
+    'contrastlevel'         : b"kg 00 ff",
+    'backlightlevel'        : b"mg 00 ff",
+    'colorlevel'            : b"ki 00 ff",
+    'colortemperaturelevel' : b"xu 00 ff",
+    'sharpnesslevel'        : b"kk 00 ff",
+    'balancelevel'          : b"kt 00 ff"
+})
 actual_codes['LK450_etc'] = common_codes.copy()
 actual_codes['LK450_etc'].update({
     'inputdigitalantenna'   : b"xb 00 00",
@@ -115,9 +131,10 @@ reverse_code_map = {
     'LE5300_etc': ('LE5300', 'LE5500', 'LE7300', 'LE530C', 'LD420', 'LD450', 'LD450C',
                     'LD520', 'LD520C', 'LD630', 'LW5600', 'LW5700', 'LW6500', 'LW9800',
                     'LV3700', 'LV5400', 'LV5500', 'LV9500', 'LK530', 'LK550', 'PZ750',
-                    'PZ950', 'PZ950U'),
+                    'PZ950', 'PZ950U', 'LW300'),
     '01C_etc': ('01C', '01C-BA'),
-    '02C_etc': ('02C', '02C-BA', '02C-BH')
+    '02C_etc': ('02C', '02C-BA', '02C-BH'),
+    'LW300C_etc': ('LW300C', 'LW300C-ZA')
 }
 all_codes = {}
 # populate model suffix lookup hash
@@ -162,12 +179,17 @@ class LGTV:
     
     def status_code(self, code):
         return code[:-2] + b'ff'
+    
 
     def lookup(self, command):
+        levelPattern = re.compile("^(.*level)([0-9]{1,3})$")
+        matchLevel = levelPattern.match(command)
         if command.startswith('toggle'):
             states = self.toggles.get(command)
             state_codes = (self.codes[states[0]], self.codes[states[1]])
             return self.toggle(self.status_code(state_codes[0]), state_codes)
+        elif matchLevel:
+            return self.generate_hex_code(matchLevel.group(1), matchLevel.group(2))
         elif command.endswith('up'):
             key = command[:-2] + 'level'
             return self.increment(self.status_code(self.codes[key]))
@@ -176,6 +198,13 @@ class LGTV:
             return self.decrement(self.status_code(self.codes[key]))
         else:
             return self.codes[command]
+
+
+    def generate_hex_code(self, command, decimalValue):
+        hexValue = hex(int(decimalValue))[2:]
+        return self.codes[command][:-2] + str(hexValue).encode()
+
+
 
     # Returns None on error, full response otherwise
     def query_full(self, code):
@@ -192,11 +221,17 @@ class LGTV:
     def query(self, command):
         if self.is_status(command):
             return self.query_data(self.lookup(command))
+        elif self.is_level(command):
+            hexValue = self.query_data(self.lookup(command))
+            return int(hexValue, 16)
         else:
             return self.query_full(self.lookup(command)) and True
        
     def is_status(self, command):
-        return command.endswith('status') or command.endswith('level')
+        return command.endswith('status')
+
+    def is_level(self, command):
+        return command.endswith('level')
 
     def is_success(self, response):
         return response[-5:-3] == b'OK'
